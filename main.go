@@ -38,17 +38,17 @@ const usageExample = `
 bosh-gcscli --help
 
 # Upload a blob to the GCS blobstore.
-bosh-gcscli -c config.json put <path/to/file> <remote-blob>
+bosh-gcscli -b bucket put <path/to/file> <remote-blob>
 
 # Fetch a blob from the GCS blobstore.
 # Destination file will be overwritten if exists.
-bosh-gcscli -c config.json get <remote-blob> <path/to/file>
+bosh-gcscli -b bucket get <remote-blob> <path/to/file>
 
 # Remove a blob from the GCS blobstore.
-bosh-gcscli -c config.json delete <remote-blob>
+bosh-gcscli -b bucket delete <remote-blob>
 
 # Checks if blob exists in the GCS blobstore.
-bosh-gcscli -c config.json exists <remote-blob>
+bosh-gcscli -b bucket exists <remote-blob>
 
 # Generate a signed url for an object
 # if an encryption key is present in config, the appropriate header will be sent
@@ -56,36 +56,40 @@ bosh-gcscli -c config.json exists <remote-blob>
 # Where:
 # - <http action> is GET, PUT, or DELETE
 # - <expiry> is a duration string less than 7 days (e.g. "6h")
-# eg bosh-gcscli -c config.json sign blobid PUT 24h
-bosh-gcscli -c config.json sign <remote-blob> <http action> <expiry>`
+# eg bosh-gcscli -b bucket sign blobid PUT 24h
+bosh-gcscli -b bucket sign <remote-blob> <http action> <expiry>`
 
 var (
-	showVer    = flag.Bool("v", false, "Print CLI version")
-	shortHelp  = flag.Bool("h", false, "Print this help text")
-	longHelp   = flag.Bool("help", false, "Print this help text")
-	configPath = flag.String("c", "",
-		`path to a JSON file with the following contents:
-	{
-		"bucket_name":         "name of Google Cloud Storage bucket (required)",
-		"credentials_source":  "Optional, defaults to Application Default Credentials or none)
-		                        (can be 'static' for a service account specified in json_key),
-		                        (can be 'none' for explicitly no credentials)"
-		"json_key":            "JSON Service Account File
-		                        (optional, required for 'static' credentials)",
-		"storage_class":       "storage class for objects
-		                        (optional, defaults to bucket settings)",
-		"encryption_key":      "Base64 encoded 32 byte Customer-Supplied
-		                        encryption key used to encrypt objects
-								(optional, defaults to GCS controlled key)"
-	}
+	showVer      = flag.Bool("v", false, "Print CLI version")
+	shortHelp    = flag.Bool("h", false, "Print this help text")
+	longHelp     = flag.Bool("help", false, "Print this help text")
+	bucket       = flag.String("b", "", "GCS bucket name")
+	storageClass = flag.String("storage-class", "", "GCS storage class (defaults to bucket settings")
 
-	storage_class is one of MULTI_REGIONAL, REGIONAL, NEARLINE, or COLDLINE.
-	For more information on characteristics and location compatibility:
-	    https://cloud.google.com/storage/docs/storage-classes
+// 	configPath = flag.String("c", "",
+// 		`path to a JSON file with the following contents:
+// 	{
+// 		"bucket_name":         "name of Google Cloud Storage bucket (required)",
+// 		"credentials_source":  "Optional, defaults to Application Default Credentials or none)
+// 		                        (can be 'static' for a service account specified in json_key),
+// 		                        (can be 'none' for explicitly no credentials)"
+// 		"json_key":            "JSON Service Account File
+// 		                        (optional, required for 'static' credentials)",
+// 		"storage_class":       "storage class for objects
+// 		                        (optional, defaults to bucket settings)",
+// 		"encryption_key":      "Base64 encoded 32 byte Customer-Supplied
+// 		                        encryption key used to encrypt objects
+// 								(optional, defaults to GCS controlled key)"
+// 	}
 
-	For more information on Customer-Supplied encryption keys:
-		https://cloud.google.com/storage/docs/encryption
-`)
+// 	storage_class is one of MULTI_REGIONAL, REGIONAL, NEARLINE, or COLDLINE.
+// 	For more information on characteristics and location compatibility:
+// 	    https://cloud.google.com/storage/docs/storage-classes
+
+//	For more information on Customer-Supplied encryption keys:
+//		https://cloud.google.com/storage/docs/encryption
+//
+// `)
 )
 
 func main() {
@@ -102,18 +106,26 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *configPath == "" {
-		log.Fatalf("no config file provided\nSee -help for usage\n")
-	}
+	// if *configPath == "" {
+	// 	log.Fatalf("no config file provided\nSee -help for usage\n")
+	// }
 
-	configFile, err := os.Open(*configPath)
-	if err != nil {
-		log.Fatalf("opening config %s: %v\n", *configPath, err)
-	}
+	// configFile, err := os.Open(*configPath)
+	// if err != nil {
+	// 	log.Fatalf("opening config %s: %v\n", *configPath, err)
+	// }
 
-	gcsConfig, err := config.NewFromReader(configFile)
-	if err != nil {
-		log.Fatalf("reading config %s: %v\n", *configPath, err)
+	// gcsConfig, err := config.NewFromReader(configFile)
+	// if err != nil {
+	// 	log.Fatalf("reading config %s: %v\n", *configPath, err)
+	// }
+
+	if *bucket == "" {
+		log.Fatalf("no bucket name provided\nSee -help for usage\n")
+	}
+	gcsConfig := config.GCSCli{
+		BucketName:   *bucket,
+		StorageClass: *storageClass,
 	}
 
 	ctx := context.Background()
@@ -144,7 +156,9 @@ func main() {
 
 		defer sourceFile.Close()
 		err = blobstoreClient.Put(sourceFile, dst)
-		fmt.Println(err)
+		if err != nil {
+			log.Fatalln(err)
+		}
 	case "get":
 		if len(nonFlagArgs) != 3 {
 			log.Fatalf("get method expected 2 arguments got %d\n", len(nonFlagArgs))
@@ -159,12 +173,18 @@ func main() {
 
 		defer dstFile.Close()
 		err = blobstoreClient.Get(src, dstFile)
+		if err != nil {
+			log.Fatalln(err)
+		}
 	case "delete":
 		if len(nonFlagArgs) != 2 {
 			log.Fatalf("delete method expected 2 arguments got %d\n", len(nonFlagArgs))
 		}
 
 		err = blobstoreClient.Delete(nonFlagArgs[1])
+		if err != nil {
+			log.Fatalln(err)
+		}
 	case "exists":
 		if len(nonFlagArgs) != 2 {
 			log.Fatalf("exists method expected 2 arguments got %d\n", len(nonFlagArgs))
