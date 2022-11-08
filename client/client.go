@@ -21,11 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"time"
 
 	"golang.org/x/oauth2/google"
-
-	"log"
 
 	"cloud.google.com/go/storage"
 	"github.com/cloudfoundry/bosh-gcscli/config"
@@ -103,6 +102,33 @@ func (client *GCSBlobstore) Get(src string, dest io.Writer) error {
 
 func (client *GCSBlobstore) getReader(gcs *storage.Client, src string) (*storage.Reader, error) {
 	return client.getObjectHandle(gcs, src).NewReader(context.Background())
+}
+
+// Put2 is a simplified implementation of file upload with retries removed and accepts
+// a simple io.Reaader instead of io.ReadSeeker making it easier to implement gzip.
+func (client *GCSBlobstore) Put2(src io.Reader, dest string, compressed bool) error {
+	if client.readOnly() {
+		return ErrInvalidROWriteOperation
+	}
+
+	if err := client.validateRemoteConfig(); err != nil {
+		return err
+	}
+
+	remoteWriter := client.getObjectHandle(client.authenticatedGCS, dest).NewWriter(context.Background())
+	remoteWriter.ObjectAttrs.StorageClass = client.config.StorageClass
+	remoteWriter.ObjectAttrs.ContentType = "application/octet-stream"
+
+	if compressed {
+		remoteWriter.ObjectAttrs.ContentEncoding = "gzip"
+	}
+
+	if _, err := io.Copy(remoteWriter, src); err != nil {
+		remoteWriter.CloseWithError(err) //nolint:errcheck,staticcheck
+		return err
+	}
+
+	return remoteWriter.Close()
 }
 
 // Put uploads a blob to the GCS blobstore.

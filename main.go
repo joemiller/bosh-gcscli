@@ -17,8 +17,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -65,6 +67,7 @@ var (
 	longHelp     = flag.Bool("help", false, "Print this help text")
 	bucket       = flag.String("b", "", "GCS bucket name")
 	storageClass = flag.String("storage-class", "", "GCS storage class (defaults to bucket settings")
+	compress     = flag.Bool("z", false, "Compress objects with gzip when uploading")
 
 // 	configPath = flag.String("c", "",
 // 		`path to a JSON file with the following contents:
@@ -154,11 +157,34 @@ func main() {
 			log.Fatalln(err)
 		}
 
-		defer sourceFile.Close()
-		err = blobstoreClient.Put(sourceFile, dst)
-		if err != nil {
-			log.Fatalln(err)
+		if *compress {
+			pr, pw := io.Pipe()
+			gz := gzip.NewWriter(pw)
+
+			go func() {
+				defer pw.Close()
+				defer gz.Close()
+				defer sourceFile.Close()
+
+				_, err := io.Copy(gz, sourceFile)
+				if err != nil {
+					log.Printf("WARN: gzip failed: %v", err)
+				}
+			}()
+
+			err = blobstoreClient.Put2(pr, dst, *compress)
+			if err != nil {
+				log.Fatalf("Upload failed: %v", err)
+			}
+		} else {
+			defer sourceFile.Close()
+			err = blobstoreClient.Put2(sourceFile, dst, *compress)
+			if err != nil {
+				log.Fatalln(err)
+				log.Fatalf("Upload failed: %v", err)
+			}
 		}
+
 	case "get":
 		if len(nonFlagArgs) != 3 {
 			log.Fatalf("get method expected 2 arguments got %d\n", len(nonFlagArgs))
